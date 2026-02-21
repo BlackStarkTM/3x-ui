@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 )
 
@@ -83,21 +84,45 @@ func getBaseDir() string {
 	return exeDir
 }
 
-// GetDBFolderPath returns the path to the database folder based on environment variables or platform defaults.
-func GetDBFolderPath() string {
-	dbFolderPath := os.Getenv("XUI_DB_FOLDER")
-	if dbFolderPath != "" {
-		return dbFolderPath
+func getEnvOrDefault(key string, fallback string) string {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
 	}
-	if runtime.GOOS == "windows" {
-		return getBaseDir()
-	}
-	return "/etc/x-ui"
+	return value
 }
 
-// GetDBPath returns the full path to the database file.
+func getEnvIntOrDefault(key string, fallback int) int {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+// GetDBConnectionString returns PostgreSQL DSN from env or a value assembled from XUI_DB_* variables.
+func GetDBConnectionString() string {
+	if dsn := strings.TrimSpace(os.Getenv("XUI_DB_DSN")); dsn != "" {
+		return dsn
+	}
+	return fmt.Sprintf(
+		"host=%s port=%d user=%s password=%s dbname=%s sslmode=%s TimeZone=UTC",
+		getEnvOrDefault("XUI_DB_HOST", "127.0.0.1"),
+		getEnvIntOrDefault("XUI_DB_PORT", 5432),
+		getEnvOrDefault("XUI_DB_USER", "postgres"),
+		os.Getenv("XUI_DB_PASSWORD"),
+		getEnvOrDefault("XUI_DB_NAME", "xui"),
+		getEnvOrDefault("XUI_DB_SSLMODE", "disable"),
+	)
+}
+
+// GetDBPath is kept for backward compatibility and now returns PostgreSQL DSN.
 func GetDBPath() string {
-	return fmt.Sprintf("%s/%s.db", GetDBFolderPath(), GetName())
+	return GetDBConnectionString()
 }
 
 // GetLogFolder returns the path to the log folder based on environment variables or platform defaults.
@@ -134,23 +159,5 @@ func copyFile(src, dst string) error {
 }
 
 func init() {
-	if runtime.GOOS != "windows" {
-		return
-	}
-	if os.Getenv("XUI_DB_FOLDER") != "" {
-		return
-	}
-	oldDBFolder := "/etc/x-ui"
-	oldDBPath := fmt.Sprintf("%s/%s.db", oldDBFolder, GetName())
-	newDBFolder := GetDBFolderPath()
-	newDBPath := fmt.Sprintf("%s/%s.db", newDBFolder, GetName())
-	_, err := os.Stat(newDBPath)
-	if err == nil {
-		return // new exists
-	}
-	_, err = os.Stat(oldDBPath)
-	if os.IsNotExist(err) {
-		return // old does not exist
-	}
-	_ = copyFile(oldDBPath, newDBPath) // ignore error
+	// Fix: legacy SQLite DB migration is intentionally disabled because PostgreSQL is now mandatory.
 }

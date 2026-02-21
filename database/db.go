@@ -1,23 +1,24 @@
 // Package database provides database initialization, migration, and management utilities
-// for the 3x-ui panel using GORM with SQLite.
+// for the 3x-ui panel using GORM with PostgreSQL.
 package database
 
 import (
-	"bytes"
-	"errors"
+	"fmt"
 	"io"
-	"io/fs"
 	"log"
 	"os"
-	"path"
+	"os/exec"
 	"slices"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/mhsanaei/3x-ui/v2/config"
 	"github.com/mhsanaei/3x-ui/v2/database/model"
 	"github.com/mhsanaei/3x-ui/v2/util/crypto"
 	"github.com/mhsanaei/3x-ui/v2/xray"
 
-	"gorm.io/driver/sqlite"
+	"github.com/go-gorm/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
@@ -49,7 +50,6 @@ func initModels() error {
 	return nil
 }
 
-// initUser creates a default admin user if the users table is empty.
 func initUser() error {
 	empty, err := isTableEmpty("users")
 	if err != nil {
@@ -58,22 +58,17 @@ func initUser() error {
 	}
 	if empty {
 		hashedPassword, err := crypto.HashPasswordAsBcrypt(defaultPassword)
-
 		if err != nil {
 			log.Printf("Error hashing default password: %v", err)
 			return err
 		}
 
-		user := &model.User{
-			Username: defaultUsername,
-			Password: hashedPassword,
-		}
+		user := &model.User{Username: defaultUsername, Password: hashedPassword}
 		return db.Create(user).Error
 	}
 	return nil
 }
 
-// runSeeders migrates user passwords to bcrypt and records seeder execution to prevent re-running.
 func runSeeders(isUsersEmpty bool) error {
 	empty, err := isTableEmpty("history_of_seeders")
 	if err != nil {
@@ -82,69 +77,79 @@ func runSeeders(isUsersEmpty bool) error {
 	}
 
 	if empty && isUsersEmpty {
-		hashSeeder := &model.HistoryOfSeeders{
-			SeederName: "UserPasswordHash",
-		}
+		hashSeeder := &model.HistoryOfSeeders{SeederName: "UserPasswordHash"}
 		return db.Create(hashSeeder).Error
-	} else {
-		var seedersHistory []string
-		db.Model(&model.HistoryOfSeeders{}).Pluck("seeder_name", &seedersHistory)
-
-		if !slices.Contains(seedersHistory, "UserPasswordHash") && !isUsersEmpty {
-			var users []model.User
-			db.Find(&users)
-
-			for _, user := range users {
-				hashedPassword, err := crypto.HashPasswordAsBcrypt(user.Password)
-				if err != nil {
-					log.Printf("Error hashing password for user '%s': %v", user.Username, err)
-					return err
-				}
-				db.Model(&user).Update("password", hashedPassword)
-			}
-
-			hashSeeder := &model.HistoryOfSeeders{
-				SeederName: "UserPasswordHash",
-			}
-			return db.Create(hashSeeder).Error
-		}
 	}
 
-	return nil
+	var seedersHistory []string
+	db.Model(&model.HistoryOfSeeders{}).Pluck("seeder_name", &seedersHistory)
+	if slices.Contains(seedersHistory, "UserPasswordHash") || isUsersEmpty {
+		return nil
+	}
+
+	var users []model.User
+	db.Find(&users)
+	for _, user := range users {
+		hashedPassword, err := crypto.HashPasswordAsBcrypt(user.Password)
+		if err != nil {
+			log.Printf("Error hashing password for user '%s': %v", user.Username, err)
+			return err
+		}
+		db.Model(&user).Update("password", hashedPassword)
+	}
+
+	hashSeeder := &model.HistoryOfSeeders{SeederName: "UserPasswordHash"}
+	return db.Create(hashSeeder).Error
 }
 
-// isTableEmpty returns true if the named table contains zero rows.
 func isTableEmpty(tableName string) (bool, error) {
 	var count int64
 	err := db.Table(tableName).Count(&count).Error
 	return count == 0, err
 }
 
-// InitDB sets up the database connection, migrates models, and runs seeders.
-func InitDB(dbPath string) error {
-	dir := path.Dir(dbPath)
-	err := os.MkdirAll(dir, fs.ModePerm)
+func envInt(key string, fallback int) int {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func configureConnectionPool() error {
+	sqlDB, err := db.DB()
 	if err != nil {
 		return err
 	}
+	sqlDB.SetMaxOpenConns(envInt("XUI_DB_MAX_OPEN_CONNS", 25))
+	sqlDB.SetMaxIdleConns(envInt("XUI_DB_MAX_IDLE_CONNS", 5))
+	sqlDB.SetConnMaxLifetime(time.Duration(envInt("XUI_DB_CONN_MAX_LIFETIME_MIN", 30)) * time.Minute)
+	sqlDB.SetConnMaxIdleTime(time.Duration(envInt("XUI_DB_CONN_MAX_IDLE_TIME_MIN", 10)) * time.Minute)
+	return nil
+}
 
+// InitDB sets up the database connection, migrates models, and runs seeders.
+func InitDB(connectionString string) error {
 	var gormLogger logger.Interface
-
 	if config.IsDebug() {
 		gormLogger = logger.Default
 	} else {
 		gormLogger = logger.Discard
 	}
 
-	c := &gorm.Config{
-		Logger: gormLogger,
-	}
-	db, err = gorm.Open(sqlite.Open(dbPath), c)
+	var err error
+	db, err = gorm.Open(postgres.Open(connectionString), &gorm.Config{Logger: gormLogger, PrepareStmt: true})
 	if err != nil {
 		return err
 	}
-
-	if err := initModels(); err != nil {
+	if err = configureConnectionPool(); err != nil {
+		return err
+	}
+	if err = initModels(); err != nil {
 		return err
 	}
 
@@ -152,78 +157,52 @@ func InitDB(dbPath string) error {
 	if err != nil {
 		return err
 	}
-
-	if err := initUser(); err != nil {
+	if err = initUser(); err != nil {
 		return err
 	}
 	return runSeeders(isUsersEmpty)
 }
 
-// CloseDB closes the database connection if it exists.
 func CloseDB() error {
-	if db != nil {
-		sqlDB, err := db.DB()
-		if err != nil {
-			return err
-		}
-		return sqlDB.Close()
+	if db == nil {
+		return nil
 	}
-	return nil
-}
-
-// GetDB returns the global GORM database instance.
-func GetDB() *gorm.DB {
-	return db
-}
-
-// IsNotFound checks if the given error is a GORM record not found error.
-func IsNotFound(err error) bool {
-	return err == gorm.ErrRecordNotFound
-}
-
-// IsSQLiteDB checks if the given file is a valid SQLite database by reading its signature.
-func IsSQLiteDB(file io.ReaderAt) (bool, error) {
-	signature := []byte("SQLite format 3\x00")
-	buf := make([]byte, len(signature))
-	_, err := file.ReadAt(buf, 0)
-	if err != nil {
-		return false, err
-	}
-	return bytes.Equal(buf, signature), nil
-}
-
-// Checkpoint performs a WAL checkpoint on the SQLite database to ensure data consistency.
-func Checkpoint() error {
-	// Update WAL
-	err := db.Exec("PRAGMA wal_checkpoint;").Error
+	sqlDB, err := db.DB()
 	if err != nil {
 		return err
 	}
-	return nil
+	return sqlDB.Close()
 }
 
-// ValidateSQLiteDB opens the provided sqlite DB path with a throw-away connection
-// and runs a PRAGMA integrity_check to ensure the file is structurally sound.
-// It does not mutate global state or run migrations.
-func ValidateSQLiteDB(dbPath string) error {
-	if _, err := os.Stat(dbPath); err != nil { // file must exist
-		return err
+func GetDB() *gorm.DB { return db }
+
+func IsNotFound(err error) bool { return err == gorm.ErrRecordNotFound }
+
+// Checkpoint is kept for backward compatibility; PostgreSQL handles checkpoints internally.
+func Checkpoint() error { return nil }
+
+func runPostgresCLI(stdin io.Reader, binary string, args ...string) ([]byte, error) {
+	if _, err := exec.LookPath(binary); err != nil {
+		return nil, fmt.Errorf("required executable %s is not available: %w", binary, err)
 	}
-	gdb, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{Logger: logger.Discard})
+	cmd := exec.Command(binary, args...)
+	if stdin != nil {
+		cmd.Stdin = stdin
+	}
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return err
+		return out, fmt.Errorf("%s failed: %w: %s", binary, err, strings.TrimSpace(string(out)))
 	}
-	sqlDB, err := gdb.DB()
-	if err != nil {
-		return err
-	}
-	defer sqlDB.Close()
-	var res string
-	if err := gdb.Raw("PRAGMA integrity_check;").Scan(&res).Error; err != nil {
-		return err
-	}
-	if res != "ok" {
-		return errors.New("sqlite integrity check failed: " + res)
-	}
-	return nil
+	return out, nil
+}
+
+// ExportBackup creates a plain SQL dump for the configured PostgreSQL database.
+func ExportBackup() ([]byte, error) {
+	return runPostgresCLI(nil, "pg_dump", "--no-owner", "--no-privileges", "--dbname="+config.GetDBConnectionString())
+}
+
+// ImportBackup restores a plain SQL dump into the configured PostgreSQL database.
+func ImportBackup(reader io.Reader) error {
+	_, err := runPostgresCLI(reader, "psql", "--set", "ON_ERROR_STOP=1", "--single-transaction", "--dbname="+config.GetDBConnectionString())
+	return err
 }

@@ -115,14 +115,12 @@ func (s *SubService) GetSubs(subId string, host string) ([]string, int64, xray.C
 func (s *SubService) getInboundsBySubId(subId string) ([]*model.Inbound, error) {
 	db := database.GetDB()
 	var inbounds []*model.Inbound
-	err := db.Model(model.Inbound{}).Preload("ClientStats").Where(`id in (
-		SELECT DISTINCT inbounds.id
-		FROM inbounds,
-			JSON_EACH(JSON_EXTRACT(inbounds.settings, '$.clients')) AS client 
-		WHERE
-			protocol in ('vmess','vless','trojan','shadowsocks')
-			AND JSON_EXTRACT(client.value, '$.subId') = ? AND enable = ?
-	)`, subId, true).Find(&inbounds).Error
+	err := db.Model(&model.Inbound{}).
+		Distinct("inbounds.*").
+		Joins("JOIN clients ON clients.inbound_id = inbounds.id").
+		Where("inbounds.protocol IN ? AND clients.sub_id = ? AND inbounds.enable = ?", []model.Protocol{model.VMESS, model.VLESS, model.Trojan, model.Shadowsocks}, subId, true).
+		Preload("ClientStats").
+		Find(&inbounds).Error
 	if err != nil {
 		return nil, err
 	}
@@ -140,13 +138,36 @@ func (s *SubService) getClientTraffics(traffics []xray.ClientTraffic, email stri
 
 func (s *SubService) getFallbackMaster(dest string, streamSettings string) (string, int, string, error) {
 	db := database.GetDB()
-	var inbound *model.Inbound
-	err := db.Model(model.Inbound{}).
-		Where("JSON_TYPE(settings, '$.fallbacks') = 'array'").
-		Where("EXISTS (SELECT * FROM json_each(settings, '$.fallbacks') WHERE json_extract(value, '$.dest') = ?)", dest).
-		Find(&inbound).Error
+	var inbounds []*model.Inbound
+	err := db.Model(&model.Inbound{}).
+		Select("id", "listen", "port", "settings", "stream_settings").
+		Find(&inbounds).Error
 	if err != nil {
 		return "", 0, "", err
+	}
+	var inbound *model.Inbound
+	for _, candidate := range inbounds {
+		var settings map[string]any
+		if err := json.Unmarshal([]byte(candidate.Settings), &settings); err != nil {
+			continue
+		}
+		fallbacks, _ := settings["fallbacks"].([]any)
+		for _, fallback := range fallbacks {
+			item, _ := fallback.(map[string]any)
+			if item == nil {
+				continue
+			}
+			if fallbackDest, ok := item["dest"].(string); ok && fallbackDest == dest {
+				inbound = candidate
+				break
+			}
+		}
+		if inbound != nil {
+			break
+		}
+	}
+	if inbound == nil {
+		return "", 0, "", common.NewError("fallback master inbound not found")
 	}
 
 	var stream map[string]any
