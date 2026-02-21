@@ -75,7 +75,7 @@ xui_service="${XUI_SERVICE:=/etc/systemd/system}"
 log_folder="${XUI_LOG_FOLDER:=/var/log/x-ui}"
 
 # FIX: allow using a fork repository/branch for self-update operations instead of hardcoded upstream.
-github_repo="${XUI_GITHUB_REPOSITORY:=MHSanaei/3x-ui}"
+github_repo="${XUI_GITHUB_REPOSITORY:=BlackStarkTM/3x-ui}"
 github_branch="${XUI_GITHUB_BRANCH:=main}"
 github_raw_base="https://raw.githubusercontent.com/${github_repo}/${github_branch}"
 mkdir -p "${log_folder}"
