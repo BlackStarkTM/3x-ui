@@ -73,6 +73,91 @@ is_port_in_use() {
     return 1
 }
 
+get_systemd_env_file_path() {
+    case "${release}" in
+        ubuntu | debian | armbian)
+            echo "/etc/default/x-ui"
+        ;;
+        arch | manjaro | parch)
+            echo "/etc/conf.d/x-ui"
+        ;;
+        *)
+            echo "/etc/sysconfig/x-ui"
+        ;;
+    esac
+}
+
+prompt_postgres_config() {
+    echo ""
+    echo -e "${green}═══════════════════════════════════════════${plain}"
+    echo -e "${green}     PostgreSQL Connection Setup          ${plain}"
+    echo -e "${green}═══════════════════════════════════════════${plain}"
+    echo -e "${yellow}3x-ui now uses PostgreSQL. Enter database credentials.${plain}"
+
+    local db_host db_port db_name db_user db_password db_sslmode
+
+    read -rp "PostgreSQL host [127.0.0.1]: " db_host
+    db_host=${db_host:-127.0.0.1}
+
+    while true; do
+        read -rp "PostgreSQL port [5432]: " db_port
+        db_port=${db_port:-5432}
+        if [[ "$db_port" =~ ^[0-9]+$ ]] && ((db_port >= 1 && db_port <= 65535)); then
+            break
+        fi
+        echo -e "${red}Invalid port. Please enter a number in range 1-65535.${plain}"
+    done
+
+    read -rp "Database name [xui]: " db_name
+    db_name=${db_name:-xui}
+
+    read -rp "Database user [postgres]: " db_user
+    db_user=${db_user:-postgres}
+
+    while [[ -z "$db_password" ]]; do
+        read -rsp "Database password (required): " db_password
+        echo ""
+        if [[ -z "$db_password" ]]; then
+            echo -e "${red}Password cannot be empty.${plain}"
+        fi
+    done
+
+    while true; do
+        read -rp "SSL mode [disable] (disable/require/verify-ca/verify-full): " db_sslmode
+        db_sslmode=${db_sslmode:-disable}
+        case "$db_sslmode" in
+            disable | require | verify-ca | verify-full)
+                break
+            ;;
+            *)
+                echo -e "${red}Invalid SSL mode.${plain}"
+            ;;
+        esac
+    done
+
+    export XUI_DB_HOST="$db_host"
+    export XUI_DB_PORT="$db_port"
+    export XUI_DB_NAME="$db_name"
+    export XUI_DB_USER="$db_user"
+    export XUI_DB_PASSWORD="$db_password"
+    export XUI_DB_SSLMODE="$db_sslmode"
+
+    local env_file
+    env_file="$(get_systemd_env_file_path)"
+    mkdir -p "$(dirname "$env_file")"
+    cat >"$env_file" <<EOF
+XUI_DB_HOST=${db_host}
+XUI_DB_PORT=${db_port}
+XUI_DB_NAME=${db_name}
+XUI_DB_USER=${db_user}
+XUI_DB_PASSWORD=${db_password}
+XUI_DB_SSLMODE=${db_sslmode}
+EOF
+    chmod 600 "$env_file"
+
+    echo -e "${green}PostgreSQL configuration saved to ${env_file}.${plain}"
+}
+
 install_base() {
     case "${release}" in
         ubuntu | debian | armbian)
@@ -833,6 +918,7 @@ install_x-ui() {
     mv -f /usr/bin/x-ui-temp /usr/bin/x-ui
     chmod +x /usr/bin/x-ui
     mkdir -p /var/log/x-ui
+    prompt_postgres_config
     config_after_install
 
     # Etckeeper compatibility
