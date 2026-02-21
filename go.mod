@@ -26,7 +26,6 @@ require (
 	golang.org/x/sys v0.41.0
 	golang.org/x/text v0.34.0
 	google.golang.org/grpc v1.79.1
-	gorm.io/driver/sqlite v1.6.0
 	gorm.io/gorm v1.31.1
 )
 
@@ -43,6 +42,7 @@ require (
 	github.com/gabriel-vasile/mimetype v1.4.13 // indirect
 	github.com/gin-contrib/sse v1.1.0 // indirect
 	github.com/go-asn1-ber/asn1-ber v1.5.8-0.20250403174932-29230038a667 // indirect
+	github.com/go-gorm/postgres v1.6.0
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/go-playground/locales v0.14.1 // indirect
 	github.com/go-playground/universal-translator v0.18.1 // indirect

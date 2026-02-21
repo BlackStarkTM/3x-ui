@@ -3664,28 +3664,44 @@ func (t *Tgbot) sendBackup(chatId int64) {
 	}
 
 	// Send database backup
-	file, err := os.Open(config.GetDBPath())
+	dump, err := database.ExportBackup()
 	if err == nil {
-		defer file.Close()
+		tempFile, err := os.CreateTemp("", "xui-backup-*.sql")
+		if err != nil {
+			logger.Error("Error creating temporary backup file: ", err)
+			return
+		}
+		defer os.Remove(tempFile.Name())
+		if _, err = tempFile.Write(dump); err != nil {
+			tempFile.Close()
+			logger.Error("Error writing temporary backup file: ", err)
+			return
+		}
+		if _, err = tempFile.Seek(0, 0); err != nil {
+			tempFile.Close()
+			logger.Error("Error seeking temporary backup file: ", err)
+			return
+		}
+		defer tempFile.Close()
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		document := tu.Document(
 			tu.ID(chatId),
-			tu.File(file),
+			tu.File(tempFile),
 		)
 		_, err = bot.SendDocument(ctx, document)
 		if err != nil {
 			logger.Error("Error in uploading backup: ", err)
 		}
 	} else {
-		logger.Error("Error in opening db file for backup: ", err)
+		logger.Error("Error creating PostgreSQL backup: ", err)
 	}
 
 	// Small delay between file sends
 	time.Sleep(500 * time.Millisecond)
 
 	// Send config.json backup
-	file, err = os.Open(xray.GetConfigPath())
+	file, err := os.Open(xray.GetConfigPath())
 	if err == nil {
 		defer file.Close()
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

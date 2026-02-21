@@ -144,11 +144,10 @@ func (s *InboundService) GetClients(inbound *model.Inbound) ([]model.Client, err
 func (s *InboundService) getAllEmails() ([]string, error) {
 	db := database.GetDB()
 	var emails []string
-	err := db.Raw(`
-		SELECT JSON_EXTRACT(client.value, '$.email')
-		FROM inbounds,
-			JSON_EACH(JSON_EXTRACT(inbounds.settings, '$.clients')) AS client
-		`).Scan(&emails).Error
+	err := db.Model(&model.InboundClient{}).
+		Distinct("email").
+		Where("email <> ''").
+		Pluck("email", &emails).Error
 	if err != nil {
 		return nil, err
 	}
@@ -1312,14 +1311,7 @@ func (s *InboundService) GetInboundTags() (string, error) {
 
 func (s *InboundService) MigrationRemoveOrphanedTraffics() {
 	db := database.GetDB()
-	db.Exec(`
-		DELETE FROM client_traffics
-		WHERE email NOT IN (
-			SELECT JSON_EXTRACT(client.value, '$.email')
-			FROM inbounds,
-				JSON_EACH(JSON_EXTRACT(inbounds.settings, '$.clients')) AS client
-		)
-	`)
+	db.Where("NOT EXISTS (SELECT 1 FROM clients WHERE clients.email = client_traffics.email)").Delete(&xray.ClientTraffic{})
 }
 
 func (s *InboundService) AddClientStat(tx *gorm.DB, inboundId int, client *model.Client) error {
@@ -2058,14 +2050,18 @@ func (s *InboundService) UpdateClientTrafficByEmail(email string, upload int64, 
 func (s *InboundService) GetClientTrafficByID(id string) ([]xray.ClientTraffic, error) {
 	db := database.GetDB()
 	var traffics []xray.ClientTraffic
-
-	err := db.Model(xray.ClientTraffic{}).Where(`email IN(
-		SELECT JSON_EXTRACT(client.value, '$.email') as email
-		FROM inbounds,
-	  	JSON_EACH(JSON_EXTRACT(inbounds.settings, '$.clients')) AS client
-		WHERE
-	  	JSON_EXTRACT(client.value, '$.id') in (?)
-		)`, id).Find(&traffics).Error
+	ids := []string{id}
+	if strings.Contains(id, ",") {
+		ids = strings.Split(id, ",")
+		for idx := range ids {
+			ids[idx] = strings.TrimSpace(ids[idx])
+		}
+	}
+	err := db.Model(&xray.ClientTraffic{}).
+		Distinct("client_traffics.*").
+		Joins("JOIN clients ON clients.email = client_traffics.email").
+		Where("clients.client_id IN ?", ids).
+		Find(&traffics).Error
 
 	if err != nil {
 		logger.Debug(err)
