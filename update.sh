@@ -10,7 +10,7 @@ xui_folder="${XUI_MAIN_FOLDER:=/usr/local/x-ui}"
 xui_service="${XUI_SERVICE:=/etc/systemd/system}"
 
 # FIX: allow using a fork repository/branch for install & updates instead of hardcoded upstream.
-github_repo="${XUI_GITHUB_REPOSITORY:=MHSanaei/3x-ui}"
+github_repo="${XUI_GITHUB_REPOSITORY:=BlackStarkTM/3x-ui}"
 github_branch="${XUI_GITHUB_BRANCH:=main}"
 github_api_base="https://api.github.com/repos/${github_repo}"
 github_release_base="https://github.com/${github_repo}/releases/download"
