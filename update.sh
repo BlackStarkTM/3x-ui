@@ -74,6 +74,40 @@ arch() {
 
 echo "Arch: $(arch)"
 
+get_latest_tag_version() {
+    local requested_tag="${XUI_TAG_VERSION:-}"
+    local tag=""
+
+    if [[ -n "${requested_tag}" ]]; then
+        echo "${requested_tag}"
+        return 0
+    fi
+
+    tag=$(curl -fsSL "${github_api_base}/releases/latest" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+    if [[ -z "${tag}" ]]; then
+        tag=$(curl -4fsSL "${github_api_base}/releases/latest" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+    fi
+
+    # FIX: fallback to GitHub release redirect (no API quota dependency) when GitHub API is blocked/limited.
+    if [[ -z "${tag}" ]]; then
+        local latest_release_url
+        latest_release_url=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/${github_repo}/releases/latest" 2>/dev/null)
+        if [[ -n "${latest_release_url}" ]]; then
+            tag="${latest_release_url##*/}"
+            if [[ "${tag}" == "latest" ]]; then
+                tag=""
+            fi
+        fi
+    fi
+
+    if [[ -z "${tag}" ]]; then
+        return 1
+    fi
+
+    echo "${tag}"
+    return 0
+}
+
 # Simple helpers
 is_ipv4() {
     [[ "$1" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] && return 0 || return 1
@@ -763,13 +797,9 @@ update_x-ui() {
     
     echo -e "${green}Downloading new x-ui version...${plain}"
     
-    tag_version=$(${curl_bin} -Ls "${github_api_base}/releases/latest" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+    tag_version=$(get_latest_tag_version)
     if [[ ! -n "$tag_version" ]]; then
-        echo -e "${yellow}Trying to fetch version with IPv4...${plain}"
-        tag_version=$(${curl_bin} -4 -Ls "${github_api_base}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
-        if [[ ! -n "$tag_version" ]]; then
-            _fail "ERROR: Failed to fetch x-ui version, it may be due to GitHub API restrictions, please try it later"
-        fi
+        _fail "ERROR: Failed to fetch x-ui version from ${github_repo}. Set XUI_TAG_VERSION or publish Releases in your fork."
     fi
     echo -e "Got x-ui latest version: ${tag_version}, beginning the installation..."
     ${curl_bin} -fLRo ${xui_folder}-linux-$(arch).tar.gz ${github_release_base}/${tag_version}/x-ui-linux-$(arch).tar.gz 2>/dev/null
