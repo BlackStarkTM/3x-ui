@@ -2,12 +2,13 @@
 package model
 
 import (
-	"encoding/json"
-	"fmt"
+    "encoding/json"
+    "fmt"
+    "strconv"
 
-	"github.com/mhsanaei/3x-ui/v2/util/json_util"
-	"github.com/mhsanaei/3x-ui/v2/xray"
-	"gorm.io/gorm"
+    "github.com/mhsanaei/3x-ui/v2/util/json_util"
+    "github.com/mhsanaei/3x-ui/v2/xray"
+    "gorm.io/gorm"
 )
 
 // Protocol represents the protocol type for Xray inbounds.
@@ -100,7 +101,7 @@ type InboundClient struct {
 	TotalGB    int64  `json:"totalGB"`
 	ExpiryTime int64  `json:"expiryTime"`
 	Enable     bool   `json:"enable"`
-	TgID       int64  `json:"tgId"`
+	TgID       int64  `json:"tgId" form:"tgId"`
 	SubID      string `json:"subId"`
 	Comment    string `json:"comment"`
 	Reset      int    `json:"reset"`
@@ -344,4 +345,42 @@ type Client struct {
 	Reset      int    `json:"reset" form:"reset"`           // Reset period in days
 	CreatedAt  int64  `json:"created_at,omitempty"`         // Creation timestamp
 	UpdatedAt  int64  `json:"updated_at,omitempty"`         // Last update timestamp
+}
+
+// UnmarshalJSON implements custom unmarshalling for Client to handle tgId values that may be provided as strings.
+// It accepts both string and numeric representations of tgId, defaulting empty strings to 0.
+func (c *Client) UnmarshalJSON(data []byte) error {
+    type Alias Client
+    aux := &struct {
+        TgID json.RawMessage `json:"tgId"`
+        *Alias
+    }{
+        Alias: (*Alias)(c),
+    }
+    if err := json.Unmarshal(data, &aux); err != nil {
+        return err
+    }
+    if len(aux.TgID) == 0 {
+        return nil
+    }
+    if aux.TgID[0] == '"' {
+        var s string
+        if err := json.Unmarshal(aux.TgID, &s); err != nil {
+            return err
+        }
+        if s == "" {
+            c.TgID = 0
+        } else {
+            id, err := strconv.ParseInt(s, 10, 64)
+            if err != nil {
+                return err
+            }
+            c.TgID = id
+        }
+    } else {
+        if err := json.Unmarshal(aux.TgID, &c.TgID); err != nil {
+            return err
+        }
+    }
+    return nil
 }
